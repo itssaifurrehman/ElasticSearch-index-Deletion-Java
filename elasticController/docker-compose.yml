@@ -1,0 +1,16 @@
+version: '3.2'
+
+services:
+  applicaiton:
+    image: elasticcontroller
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    volumes:
+      - /data/elasticcontroller
+    ports:
+      - 8096:8096  
+      
+networks:
+  default:
+    driver: bridge
