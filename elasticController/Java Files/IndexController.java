@@ -1,10 +1,13 @@
 package com.elasticcontroller;
 
-import java.util.Date;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.io.IOException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,17 +57,14 @@ public class IndexController {
 	private static RestClient restLowLevelClient;
 
 	private String[] lines = { "GARBAGE VALUE" };
-	private String indexName = "NO_FILE_PRESENT";
-	private String defaultDifferenceIndexName = "NO_FILE_PRESENT";
-	private String defaultSameDayIndexName = "NO_FILE_PRESENT";
 	private String responseBody = "NO_RESPONSEBODY_PRESENT";
+	private String lastDateDigits = "DEFAULT";
 
 	private boolean acknowledged = false;
-
 	private boolean setTempPrint = false;
+	private List<String> totalDates = new ArrayList<>();
 
 	DateFormat numberofDaysFormat = new SimpleDateFormat("dd");
-
 	DateFormat fileNameFormat = new SimpleDateFormat("yyyy.MM.dd");
 
 	private Logger logger = LoggerFactory.getLogger(IndexController.class);
@@ -72,18 +72,11 @@ public class IndexController {
 	@Scheduled(cron = "0 0 12 * * ? ")
 	public void indexDeletion() throws IOException {
 
-		Date difference = new Date(System.currentTimeMillis() - (86400000 * xOldDaysLogs));
-		Date defaultDifference = new Date(System.currentTimeMillis() - (86400000 * 1));
-
-		defaultSameDayIndexName = filePrefix + fileNameFormat.format(new Date(System.currentTimeMillis()));
-		defaultDifferenceIndexName = filePrefix + fileNameFormat.format(defaultDifference);
-		indexName = filePrefix + fileNameFormat.format(difference);
-
 		try {
 			if (!setTempPrint) {
-				logger.info("[ " + appName + " ] application has been started with Elasticsearch's IP: "
+				logger.info("[ " + appName + " ] Application has been started with Elasticsearch's IP: "
 						+ Arrays.toString(ipAddress) + " with  Port: [ " + portNumber + " ] with Application Port: [ "
-						+ applicationPort + " ] and  Time limit of deleting the logs after every [" + (xOldDaysLogs)
+						+ applicationPort + " ] and  Time limit of deleting the logs is after every [" + (xOldDaysLogs)
 						+ "] days.");
 				setTempPrint = true;
 			}
@@ -97,36 +90,45 @@ public class IndexController {
 				restLowLevelClient = RestClient.builder(new HttpHost(ipAddress[i], portNumber, "http")).build();
 			}
 
+			LocalDate todayDate = LocalDate.now();
+			String startDateFormat = todayDate.format(DateTimeFormatter.ofPattern("yyyy.MM.dd"));
+
+			DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy.MM.dd");
+			LocalDate date = LocalDate.parse(startDateFormat, dtf).minusDays(xOldDaysLogs);
+
+			for (int i = 0; i < xOldDaysLogs; i++) {
+				date = date.plusDays(1);
+				String finalDate = date.format(dtf);
+				String days = filePrefix + finalDate;
+				totalDates.add(days.substring(days.length() - 10));
+			}
+
 			Request request = new Request(indicesPatternType, indicesPattern);
 			try {
 				Response response = restLowLevelClient.performRequest(request);
 				responseBody = EntityUtils.toString(response.getEntity());
 				lines = responseBody.split("\r\n|\r|\n");
-				logger.info("[Indexes Names] Indexes present in the elasticsearch with prefix go4logs- are:\n"
-						+ responseBody);
+				logger.info(
+						"[Index Name] Indexes present in the elasticsearch with prefix go4logs- are:\n" + responseBody);
 			} catch (Exception e) {
 				logger.warn("[Connnection Error]  Application can not make any connection with Elasticsearch");
 			}
+
 			if (lines.length > 1)
-				logger.info("[Files Count] Total files present: [" + lines.length + "]");
+				logger.info("[Files Count] Total indexed files present in elasticsearch are: [" + lines.length + "]");
+
 			for (String w : lines) {
 				try {
+					lastDateDigits = w.substring(w.length() - 10);
 					if (w != null && !w.isEmpty() && w.length() != 0) {
-						{
-							if (w.replaceAll("\\s+", "").equals(indexName.replaceAll("\\s+", ""))
-									|| w.replaceAll("\\s+", "")
-											.equals(defaultDifferenceIndexName.replaceAll("\\s+", ""))
-									|| w.replaceAll("\\s+", "")
-											.equals(defaultSameDayIndexName.replaceAll("\\s+", ""))) {
-							} else {
-								logger.info("[File Search] Looking for Index File: " + w + " to delete");
-								DeleteIndexRequest deleteIndexRequest = new DeleteIndexRequest(w);
-								AcknowledgedResponse deleteIndexResponse = restHighLevelClient.indices()
-										.delete(deleteIndexRequest, RequestOptions.DEFAULT);
-								acknowledged = deleteIndexResponse.isAcknowledged();
-								if (acknowledged) {
-									logger.info("[DELETE Request] Index File: [" + w + "] is deleted successfully.");
-								}
+						if (!totalDates.contains(lastDateDigits)) {
+							logger.info("[File Search] Looking for Index File: " + w + " to delete");
+							DeleteIndexRequest deleteIndexRequest = new DeleteIndexRequest(w);
+							AcknowledgedResponse deleteIndexResponse = restHighLevelClient.indices()
+									.delete(deleteIndexRequest, RequestOptions.DEFAULT);
+							acknowledged = deleteIndexResponse.isAcknowledged();
+							if (acknowledged) {
+								logger.info("[DELETE Request] Index File: [" + w + "] is deleted successfully.");
 							}
 						}
 					} else
@@ -138,7 +140,7 @@ public class IndexController {
 			restLowLevelClient.close();
 			restHighLevelClient.close();
 		} catch (ResponseException e) {
-			logger.warn("[FILE NOT FOUND]No Indexed File is present with name [" + indexName + "] to delete.");
+			logger.warn("[FILE NOT FOUND]No Indexed File is present to delete.");
 		}
 
 	}
